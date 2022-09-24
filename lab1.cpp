@@ -127,22 +127,30 @@ private:
     std::set<int> removeRedundancy2(std::vector<std::set<int> > coverage,
         std::vector<std::set<int> > coverageOnBars)
     {
-        std::set<int> ansver{};
-        std::sort(coverageOnBars.begin(), coverageOnBars.end(), [](const auto& a, const auto& b){
-            return a.size() < b.size();
-        });
-
-        for (int ind = 0; ind < coverageOnBars.size(); ++ind)
+        std::set<int> usedCols {};
+        for (int i = 0; i < coverageOnBars.size(); ++i)
         {
-            auto result = std::max_element(coverageOnBars[ind].begin(), coverageOnBars[ind].end(), [&coverage](int a, int b){
+            usedCols.insert(i);
+        }
+        std::set<int> ansver{};
+
+        while (usedCols.size() != 0)
+        {
+            auto r = std::min_element(usedCols.begin(), usedCols.end(), [&coverageOnBars](const auto& a, const auto& b){
+                return coverageOnBars[a].size() < coverageOnBars[b].size();
+            });
+            auto result = std::max_element(coverageOnBars[*r].begin(), coverageOnBars[*r].end(), [&coverage](int a, int b){
                 return coverage[a].size() > coverage[b].size();
             });
-
+            ansver.insert(*result);
+            std::set<int> res{};
+            std::set_difference(usedCols.begin(), usedCols.end(), coverage[*result].begin(), coverage[*result].end(), std::inserter(res, res.begin()));
+            for (auto& el: coverage[*result])
+            {
+                coverageOnBars[el].erase(*result);
+            }
+            usedCols = res;
         }
-
-        auto& smallestBar = coverageOnBars[0];
-
-        
 
         return ansver;
     }
@@ -217,7 +225,7 @@ public:
             coverage[ind] = std::move(implCov);
         }
 
-        std::set<int> ansver = removeRedundancy1(coverage);
+        std::set<int> ansver = removeRedundancy2(coverage, coverageOnBars);
         std::vector<Impl> new_data{};
         for (auto& el: ansver)
         {
