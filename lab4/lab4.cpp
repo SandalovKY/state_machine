@@ -1,5 +1,7 @@
 #include "lab4.hpp"
 
+static int32_t g_index = 0;
+
 enum class STATES
 {
     INITIATION,
@@ -11,6 +13,12 @@ enum class STATES
     EQ_END,
     FINISHED,
     INVALID
+};
+
+enum class RPN_STATES
+{
+    S0,
+    S1
 };
 
 bool isLetter(char sym)
@@ -28,13 +36,145 @@ bool isOperation(char sym)
     return (sym == '-' || sym == '+' || sym == '*' || sym == '/');
 }
 
-std::pair<std::string, std::vector<std::string>> stateMachineExecute(const char *text, uint32_t *startSymbol)
+int32_t EquationSolver::solve(const std::vector<uint32_t> &rpn)
+{
+    int32_t result{0};
+    auto it = rpn.begin();
+    std::vector<double> stack{0.};
+    while (!(((*it) & 2 << 30) != 0 && ((*it) & 0xff) == ';'))
+    {
+        if (((*it) & 2 << 30) != 0)
+        {
+            const double op2 = *stack.rbegin();
+            stack.pop_back();
+            double op1 = *stack.rbegin();
+            stack.pop_back();
+            switch ((*it) & 0xff)
+            {
+            case '+':
+                op1 += op2;
+                break;
+            case '-':
+                op1 -= op2;
+                break;
+            case '*':
+                op1 *= op2;
+                break;
+            case '/':
+                op1 /= op2;
+                break;
+            default:
+                break;
+            }
+            stack.push_back(op1);
+        }
+        else if (((*it) & 1 << 30) != 0)
+        {
+            int32_t val = m_indexes[(*it) & 0x3fffffff];
+            stack.push_back(val);
+        }
+        else
+        {
+            stack.push_back((*it));
+        }
+        ++it;
+    }
+    result = *stack.rbegin();
+    return result;
+}
+
+std::vector<uint32_t> getRPN(const std::vector<uint32_t> &srcTokens)
+{
+    static std::map<char, std::pair<int32_t, int32_t>> op2Priority{
+        {'(', {3, -1}},
+        {')', {0, NULL}},
+        {'+', {1, 1}},
+        {'-', {1, 1}},
+        {'*', {2, 2}},
+        {'/', {2, 2}},
+        {';', {-1, NULL}},
+        {'@', {NULL, -2}}};
+    std::vector<uint32_t> retRPN{};
+    std::vector<uint32_t> stack{static_cast<uint32_t>(2 << 30 | '@')};
+
+    RPN_STATES currState = RPN_STATES::S0;
+
+    auto it = srcTokens.begin();
+
+    while (it != srcTokens.end())
+    {
+        switch (currState)
+        {
+        case RPN_STATES::S0:
+            if (((*it) & (2 << 30)) != 0)
+            {
+                if (op2Priority.at((*it) & 0xff).first <= op2Priority.at((*stack.rbegin()) & 0xff).second)
+                {
+                    retRPN.push_back(*stack.rbegin());
+                    stack.pop_back();
+                    currState = RPN_STATES::S1;
+                }
+                else
+                {
+                    if (((*it) & 0xff) != ')' && ((*it) & 0xff) != ';')
+                    {
+                        stack.push_back(*it);
+                        ++it;
+                    }
+                }
+            }
+            else
+            {
+                retRPN.push_back(*it);
+                ++it;
+            }
+            break;
+        case RPN_STATES::S1:
+            if (((*it) & (2 << 30)) != 0)
+            {
+                if (op2Priority.at(*it).first <= op2Priority.at(*stack.rbegin()).second)
+                {
+                    retRPN.push_back(*stack.rbegin());
+                    stack.pop_back();
+                }
+                else
+                {
+                    if (((*it) & 0xff) != ')' && ((*it) & 0xff) != ';')
+                    {
+                        stack.push_back(*it);
+                        ++it;
+                        currState = RPN_STATES::S0;
+                    }
+                    if (((*it) & 0xff) == ')')
+                    {
+                        stack.pop_back();
+                        ++it;
+                        currState = RPN_STATES::S0;
+                    }
+                    if (((*it) & 0xff) == ';')
+                    {
+                        retRPN.push_back(*it);
+                        currState = RPN_STATES::S0;
+                        ++it;
+                    }
+                }
+            }
+            break;
+        default:
+            break;
+        }
+    }
+
+    return retRPN;
+}
+
+std::pair<std::string, std::vector<uint32_t>> EquationSolver::stateMachineExecute(const char *text, uint32_t *startSymbol)
 {
     STATES currState = STATES::INITIATION;
     char nextSymbol = {};
     std::string key{};
     std::string nextWord{};
-    std::vector<std::string> tokens{};
+    std::vector<uint32_t> tokens{};
     while (currState != STATES::FINISHED && currState != STATES::INVALID && nextSymbol != '\n')
     {
         while (text[*startSymbol] == ' ')
@@ -71,7 +211,8 @@ std::pair<std::string, std::vector<std::string>> stateMachineExecute(const char 
         case STATES::EQUATION:
             if (nextSymbol == '(')
             {
-                tokens.push_back("(");
+                uint32_t newToken = 2 << 30 | nextSymbol;
+                tokens.push_back(newToken);
             }
             else if (isLetter(nextSymbol))
             {
@@ -96,22 +237,28 @@ std::pair<std::string, std::vector<std::string>> stateMachineExecute(const char 
             if (isOperation(nextSymbol))
             {
                 currState = STATES::EQUATION;
-                tokens.push_back(nextWord);
-                tokens.push_back({nextSymbol});
+                uint32_t newToken = 1 << 30 | m_variables.at(nextWord);
+                tokens.push_back(newToken);
+                newToken = 2 << 30 | nextSymbol;
+                tokens.push_back(newToken);
                 nextWord.clear();
             }
             else if (nextSymbol == ')')
             {
                 currState = STATES::EQ_TRANS;
-                tokens.push_back(nextWord);
-                tokens.push_back({nextSymbol});
+                uint32_t newToken = 1 << 30 | m_variables.at(nextWord);
+                tokens.push_back(newToken);
+                newToken = 2 << 30 | nextSymbol;
+                tokens.push_back(newToken);
                 nextWord.clear();
             }
             else if (nextSymbol == ';')
             {
                 currState = STATES::FINISHED;
-                tokens.push_back(nextWord);
-                tokens.push_back({nextSymbol});
+                uint32_t newToken = 1 << 30 | m_variables.at(nextWord);
+                tokens.push_back(newToken);
+                newToken = 2 << 30 | nextSymbol;
+                tokens.push_back(newToken);
                 nextWord.clear();
             }
             else
@@ -127,22 +274,28 @@ std::pair<std::string, std::vector<std::string>> stateMachineExecute(const char 
             else if (isOperation(nextSymbol))
             {
                 currState = STATES::EQUATION;
-                tokens.push_back(nextWord);
-                tokens.push_back({nextSymbol});
+                uint32_t newToken = 0 | std::stoi(nextWord);
+                tokens.push_back(newToken);
+                newToken = 2 << 30 | nextSymbol;
+                tokens.push_back(newToken);
                 nextWord.clear();
             }
             else if (nextSymbol == ')')
             {
                 currState = STATES::EQ_TRANS;
-                tokens.push_back(nextWord);
-                tokens.push_back({nextSymbol});
+                uint32_t newToken = 0 | std::stoi(nextWord);
+                tokens.push_back(newToken);
+                newToken = 2 << 30 | nextSymbol;
+                tokens.push_back(newToken);
                 nextWord.clear();
             }
             else if (nextSymbol == ';')
             {
                 currState = STATES::FINISHED;
-                tokens.push_back(nextWord);
-                tokens.push_back({nextSymbol});
+                uint32_t newToken = 0 | std::stoi(nextWord);
+                tokens.push_back(newToken);
+                newToken = 2 << 30 | nextSymbol;
+                tokens.push_back(newToken);
                 nextWord.clear();
             }
             else
@@ -154,17 +307,20 @@ std::pair<std::string, std::vector<std::string>> stateMachineExecute(const char 
             if (isOperation(nextSymbol))
             {
                 currState = STATES::EQUATION;
-                tokens.push_back({nextSymbol});
+                uint32_t newToken = 2 << 30 | nextSymbol;
+                tokens.push_back(newToken);
             }
             else if (nextSymbol == ')')
             {
                 currState = STATES::EQ_TRANS;
-                tokens.push_back({nextSymbol});
+                uint32_t newToken = 2 << 30 | nextSymbol;
+                tokens.push_back(newToken);
             }
             else if (nextSymbol == ';')
             {
                 currState = STATES::FINISHED;
-                tokens.push_back({nextSymbol});
+                uint32_t newToken = 2 << 30 | nextSymbol;
+                tokens.push_back(newToken);
             }
             else
             {
@@ -179,27 +335,10 @@ std::pair<std::string, std::vector<std::string>> stateMachineExecute(const char 
         }
         ++*startSymbol;
     }
-    return std::make_pair(key, tokens);
+    return std::make_pair(key, getRPN(tokens));
 }
 
-std::vector<std::string> getRPN(const std::vector<std::string> &srcTokens)
-{
-    static std::map<std::string, std::pair<int32_t, int32_t>> op2Priority{
-        {"(", {3, -1}},
-        {")", {0, NULL}},
-        {"+", {1, 1}},
-        {"-", {1, 1}},
-        {"*", {2, 2}},
-        {"/", {2, 2}},
-        {";", {2, NULL}},
-        {"@", {NULL, -2}}};
-    std::vector<std::string> retRPN{};
-    std::vector<std::string> stack{"@"};
-
-    return retRPN;
-}
-
-EquationSolver::EquationSolver(const char *text) : m_tokens()
+EquationSolver::EquationSolver(const char *text) : m_tokens(), m_variables(), m_indexes()
 {
     uint32_t ind = 0;
     // Read whole file
@@ -208,7 +347,14 @@ EquationSolver::EquationSolver(const char *text) : m_tokens()
         // Read line
         while (text[ind] != '\n' && text[ind] != '\0')
         {
-            m_tokens.insert(stateMachineExecute(text, &ind));
+            std::pair<std::string, std::vector<uint32_t>> res = stateMachineExecute(text, &ind);
+            if (m_variables.find(res.first) == m_variables.end())
+            {
+                m_variables[res.first] = g_index;
+                int32_t solved = solve(res.second);
+                m_indexes[g_index++] = solved;
+            }
+            m_tokens.push_back(std::move(res));
             ++ind;
         }
     }
